@@ -1,0 +1,249 @@
+//@version=6
+indicator("Smart Levels | MattyG", shorttitle="SmartLevel", overlay=true,
+     max_lines_count=500, max_boxes_count=100, max_labels_count=100)
+
+// ═══════════════════════════════════════════════════════════════
+//  INPUTS
+// ═══════════════════════════════════════════════════════════════
+
+// --- Display ---
+i_tf_filter  = input.bool(true, "Only show on 15m and under", group="Display")
+
+// --- Previous Day ---
+i_show_pd    = input.bool(true,  "Show PDH / PDL",                          group="Previous Day")
+i_pdh_col    = input.color(#FF1744, "PDH Color",                            group="Previous Day")
+i_pdl_col    = input.color(#FF6D00, "PDL Color",                            group="Previous Day")
+i_pd_width   = input.int(1, "Line Width", minval=1, maxval=4,               group="Previous Day")
+
+// --- Midnight Open ---
+i_show_mid   = input.bool(true,  "Show Midnight Open",                      group="Midnight Open")
+i_mid_col    = input.color(#00E5FF, "Color",                                group="Midnight Open")
+i_mid_width  = input.int(1, "Line Width", minval=1, maxval=4,               group="Midnight Open")
+
+// --- Asia  (8 PM – 12 AM ET) ---
+i_show_asia  = input.bool(true,  "Show Asia Session",                       group="Asia  (8 PM - 12 AM ET)")
+i_asia_fill  = input.color(color.new(#7B1FA2, 86), "Box Color",             group="Asia  (8 PM - 12 AM ET)")
+i_asia_line  = input.color(#AB47BC, "Extending Lines",                      group="Asia  (8 PM - 12 AM ET)")
+i_asia_ext   = input.bool(true,  "Extend H/L into next session",            group="Asia  (8 PM - 12 AM ET)")
+
+// --- London  (2 AM – 8 AM ET) ---
+i_show_lon   = input.bool(true,  "Show London Session",                     group="London  (2 AM - 8 AM ET)")
+i_lon_fill   = input.color(color.new(#0D47A1, 86), "Box Color",             group="London  (2 AM - 8 AM ET)")
+i_lon_line   = input.color(#1E88E5, "Extending Lines",                      group="London  (2 AM - 8 AM ET)")
+i_lon_ext    = input.bool(true,  "Extend H/L into next session",            group="London  (2 AM - 8 AM ET)")
+
+// --- New York  (9:30 AM – 5 PM ET) ---
+i_show_ny    = input.bool(true,  "Show New York Session",                   group="New York  (9:30 AM - 5 PM ET)")
+i_ny_fill    = input.color(color.new(#E65100, 86), "Box Color",             group="New York  (9:30 AM - 5 PM ET)")
+i_ny_line    = input.color(#FB8C00, "Extending Lines",                      group="New York  (9:30 AM - 5 PM ET)")
+i_ny_ext     = input.bool(true,  "Extend H/L after session",                group="New York  (9:30 AM - 5 PM ET)")
+
+// ═══════════════════════════════════════════════════════════════
+//  TIMEFRAME GATE
+// ═══════════════════════════════════════════════════════════════
+tf_ok = not i_tf_filter or (timeframe.in_seconds() / 60) <= 15
+
+// ═══════════════════════════════════════════════════════════════
+//  BOX BORDER HELPER — same hue as fill, slightly more visible
+// ═══════════════════════════════════════════════════════════════
+f_border(c) => color.new(c, 85)
+
+// Small vertical gap so text sits above the line instead of on it
+LABEL_OFFSET = syminfo.mintick * 40
+
+// Helper to make a label at the current wall-clock time.
+// style_label_right  → box extends LEFT of the anchor (inside chart).
+// timenow            → always the real-time right edge, even on weekends.
+f_lbl(y, txt, col) =>
+    label.new(x=int(timenow), y=y, text=txt, xloc=xloc.bar_time,
+         color=color(na), textcolor=col, style=label.style_label_right, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════
+//  PREVIOUS DAY HIGH / LOW
+// ═══════════════════════════════════════════════════════════════
+pd_h = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+pd_l = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+
+var line  _pdh_l = na, var line  _pdl_l = na
+var label _pdh_b = na, var label _pdl_b = na
+
+new_day = ta.change(time("D")) != 0
+
+if tf_ok and i_show_pd and new_day and not na(pd_h)
+    line.delete(_pdh_l),   line.delete(_pdl_l)
+    label.delete(_pdh_b),  label.delete(_pdl_b)
+
+    _pdh_l := line.new(bar_index, pd_h, bar_index + 1, pd_h,
+         extend=extend.right, color=i_pdh_col, width=i_pd_width, style=line.style_dashed)
+    _pdl_l := line.new(bar_index, pd_l, bar_index + 1, pd_l,
+         extend=extend.right, color=i_pdl_col, width=i_pd_width, style=line.style_dashed)
+
+    _pdh_b := f_lbl(pd_h + LABEL_OFFSET, "PDH", i_pdh_col)
+    _pdl_b := f_lbl(pd_l + LABEL_OFFSET, "PDL", i_pdl_col)
+
+// ═══════════════════════════════════════════════════════════════
+//  MIDNIGHT OPEN
+// ═══════════════════════════════════════════════════════════════
+var line  _mid_l = na
+var label _mid_b = na
+
+is_midnight = hour(time, "America/New_York") == 0 and minute(time, "America/New_York") == 0
+
+if tf_ok and i_show_mid and is_midnight
+    line.delete(_mid_l)
+    label.delete(_mid_b)
+
+    _mid_l := line.new(bar_index, open, bar_index + 1, open,
+         extend=extend.right, color=i_mid_col, width=i_mid_width, style=line.style_dotted)
+    _mid_b := f_lbl(open + LABEL_OFFSET, "Midnight Open", i_mid_col)
+
+// ═══════════════════════════════════════════════════════════════
+//  SESSION HELPER
+// ═══════════════════════════════════════════════════════════════
+f_in(s) => not na(time(timeframe.period, s, "America/New_York"))
+
+// ═══════════════════════════════════════════════════════════════
+//  ASIA SESSION  (8 PM – 11:59 PM ET)
+// ═══════════════════════════════════════════════════════════════
+ASIA_SESS = "2000-2359"
+
+in_asia    = f_in(ASIA_SESS)
+asia_start = in_asia and not in_asia[1]
+asia_end   = not in_asia and in_asia[1]
+
+var float _a_hi   = na, var float _a_lo   = na
+var box   _a_box  = na
+var line  _a_hl   = na, var line  _a_ll   = na
+var label _a_hl_b = na, var label _a_ll_b = na
+
+if tf_ok and i_show_asia
+    if asia_start
+        _a_hi := high
+        _a_lo := low
+        box.delete(_a_box)
+        _a_box := box.new(bar_index, high, bar_index + 1, low,
+             bgcolor=i_asia_fill, border_color=f_border(i_asia_fill), border_width=1)
+
+    if in_asia and not na(_a_hi) and not na(_a_box)
+        _a_hi := math.max(_a_hi, high)
+        _a_lo := math.min(_a_lo, low)
+        box.set_top(_a_box,    _a_hi)
+        box.set_bottom(_a_box, _a_lo)
+        box.set_right(_a_box,  bar_index + 1)
+
+    if asia_end and i_asia_ext and not na(_a_hi)
+        line.delete(_a_hl),    line.delete(_a_ll)
+        label.delete(_a_hl_b), label.delete(_a_ll_b)
+
+        _a_hl   := line.new(bar_index, _a_hi, bar_index + 1, _a_hi,
+             extend=extend.right, color=i_asia_line, width=1)
+        _a_ll   := line.new(bar_index, _a_lo, bar_index + 1, _a_lo,
+             extend=extend.right, color=i_asia_line, width=1)
+        _a_hl_b := f_lbl(_a_hi + LABEL_OFFSET, "Asia High", i_asia_line)
+        _a_ll_b := f_lbl(_a_lo + LABEL_OFFSET, "Asia Low",  i_asia_line)
+
+// ═══════════════════════════════════════════════════════════════
+//  LONDON SESSION  (2 AM – 8 AM ET)
+// ═══════════════════════════════════════════════════════════════
+LON_SESS = "0200-0800"
+
+in_lon    = f_in(LON_SESS)
+lon_start = in_lon and not in_lon[1]
+lon_end   = not in_lon and in_lon[1]
+
+var float _l_hi   = na, var float _l_lo   = na
+var box   _l_box  = na
+var line  _l_hl   = na, var line  _l_ll   = na
+var label _l_hl_b = na, var label _l_ll_b = na
+
+if tf_ok and i_show_lon
+    if lon_start
+        _l_hi := high
+        _l_lo := low
+        box.delete(_l_box)
+        _l_box := box.new(bar_index, high, bar_index + 1, low,
+             bgcolor=i_lon_fill, border_color=f_border(i_lon_fill), border_width=1)
+
+    if in_lon and not na(_l_hi) and not na(_l_box)
+        _l_hi := math.max(_l_hi, high)
+        _l_lo := math.min(_l_lo, low)
+        box.set_top(_l_box,    _l_hi)
+        box.set_bottom(_l_box, _l_lo)
+        box.set_right(_l_box,  bar_index + 1)
+
+    if lon_end and i_lon_ext and not na(_l_hi)
+        line.delete(_l_hl),    line.delete(_l_ll)
+        label.delete(_l_hl_b), label.delete(_l_ll_b)
+
+        _l_hl   := line.new(bar_index, _l_hi, bar_index + 1, _l_hi,
+             extend=extend.right, color=i_lon_line, width=1)
+        _l_ll   := line.new(bar_index, _l_lo, bar_index + 1, _l_lo,
+             extend=extend.right, color=i_lon_line, width=1)
+        _l_hl_b := f_lbl(_l_hi + LABEL_OFFSET, "London High", i_lon_line)
+        _l_ll_b := f_lbl(_l_lo + LABEL_OFFSET, "London Low",  i_lon_line)
+
+// ═══════════════════════════════════════════════════════════════
+//  NEW YORK SESSION  (9:30 AM – 5 PM ET)
+// ═══════════════════════════════════════════════════════════════
+NY_SESS = "0930-1700"
+
+in_ny    = f_in(NY_SESS)
+ny_start = in_ny and not in_ny[1]
+ny_end   = not in_ny and in_ny[1]
+
+var float _n_hi   = na, var float _n_lo   = na
+var box   _n_box  = na
+var line  _n_hl   = na, var line  _n_ll   = na
+var label _n_hl_b = na, var label _n_ll_b = na
+
+if tf_ok and i_show_ny
+    if ny_start
+        _n_hi := high
+        _n_lo := low
+        box.delete(_n_box)
+        _n_box := box.new(bar_index, high, bar_index + 1, low,
+             bgcolor=i_ny_fill, border_color=f_border(i_ny_fill), border_width=1)
+
+    if in_ny and not na(_n_hi) and not na(_n_box)
+        _n_hi := math.max(_n_hi, high)
+        _n_lo := math.min(_n_lo, low)
+        box.set_top(_n_box,    _n_hi)
+        box.set_bottom(_n_box, _n_lo)
+        box.set_right(_n_box,  bar_index + 1)
+
+    if ny_end and i_ny_ext and not na(_n_hi)
+        line.delete(_n_hl),    line.delete(_n_ll)
+        label.delete(_n_hl_b), label.delete(_n_ll_b)
+
+        _n_hl   := line.new(bar_index, _n_hi, bar_index + 1, _n_hi,
+             extend=extend.right, color=i_ny_line, width=1)
+        _n_ll   := line.new(bar_index, _n_lo, bar_index + 1, _n_lo,
+             extend=extend.right, color=i_ny_line, width=1)
+        _n_hl_b := f_lbl(_n_hi + LABEL_OFFSET, "Prev NY High", i_ny_line)
+        _n_ll_b := f_lbl(_n_lo + LABEL_OFFSET, "Prev NY Low",  i_ny_line)
+
+// ═══════════════════════════════════════════════════════════════
+//  KEEP LABELS AT THE REAL-TIME RIGHT EDGE
+//  Runs only on the last bar. Uses timenow (wall-clock) so labels
+//  stay at the right edge even during weekends / market closures.
+// ═══════════════════════════════════════════════════════════════
+if barstate.islast and tf_ok
+    tnow = int(timenow)
+    if not na(_pdh_b)
+        label.set_x(_pdh_b, tnow)
+    if not na(_pdl_b)
+        label.set_x(_pdl_b, tnow)
+    if not na(_mid_b)
+        label.set_x(_mid_b, tnow)
+    if not na(_a_hl_b)
+        label.set_x(_a_hl_b, tnow)
+    if not na(_a_ll_b)
+        label.set_x(_a_ll_b, tnow)
+    if not na(_l_hl_b)
+        label.set_x(_l_hl_b, tnow)
+    if not na(_l_ll_b)
+        label.set_x(_l_ll_b, tnow)
+    if not na(_n_hl_b)
+        label.set_x(_n_hl_b, tnow)
+    if not na(_n_ll_b)
+        label.set_x(_n_ll_b, tnow)
