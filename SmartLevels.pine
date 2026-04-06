@@ -6,57 +6,40 @@ indicator("Smart Levels | MattyG", shorttitle="SmartLevel", overlay=true,
 //  INPUTS
 // ═══════════════════════════════════════════════════════════════
 
-// --- Display ---
-i_tf_filter  = input.bool(true, "Only show on 15m and under", group="Display")
+i_tf_filter  = input.bool(true, "Only show on 15m and under",               group="Display")
 
-// --- Previous Day ---
 i_show_pd    = input.bool(true,  "Show PDH / PDL",                          group="Previous Day")
 i_pdh_col    = input.color(#FF1744, "PDH Color",                            group="Previous Day")
 i_pdl_col    = input.color(#FF6D00, "PDL Color",                            group="Previous Day")
 i_pd_width   = input.int(1, "Line Width", minval=1, maxval=4,               group="Previous Day")
 
-// --- Midnight Open ---
 i_show_mid   = input.bool(true,  "Show Midnight Open",                      group="Midnight Open")
-i_mid_col    = input.color(#00E5FF, "Color",                                group="Midnight Open")
+i_mid_col    = input.color(#00c1d6, "Color",                                group="Midnight Open")
 i_mid_width  = input.int(1, "Line Width", minval=1, maxval=4,               group="Midnight Open")
 
-// --- Asia  (8 PM – 12 AM ET) ---
 i_show_asia  = input.bool(true,  "Show Asia Session",                       group="Asia  (8 PM - 12 AM ET)")
 i_asia_fill  = input.color(color.new(#7B1FA2, 86), "Box Color",             group="Asia  (8 PM - 12 AM ET)")
 i_asia_line  = input.color(#AB47BC, "Extending Lines",                      group="Asia  (8 PM - 12 AM ET)")
 i_asia_ext   = input.bool(true,  "Extend H/L into next session",            group="Asia  (8 PM - 12 AM ET)")
 
-// --- London  (2 AM – 8 AM ET) ---
 i_show_lon   = input.bool(true,  "Show London Session",                     group="London  (2 AM - 8 AM ET)")
 i_lon_fill   = input.color(color.new(#0D47A1, 86), "Box Color",             group="London  (2 AM - 8 AM ET)")
 i_lon_line   = input.color(#1E88E5, "Extending Lines",                      group="London  (2 AM - 8 AM ET)")
 i_lon_ext    = input.bool(true,  "Extend H/L into next session",            group="London  (2 AM - 8 AM ET)")
 
-// --- New York  (9:30 AM – 5 PM ET) ---
 i_show_ny    = input.bool(true,  "Show New York Session",                   group="New York  (9:30 AM - 5 PM ET)")
 i_ny_fill    = input.color(color.new(#E65100, 86), "Box Color",             group="New York  (9:30 AM - 5 PM ET)")
 i_ny_line    = input.color(#FB8C00, "Extending Lines",                      group="New York  (9:30 AM - 5 PM ET)")
 i_ny_ext     = input.bool(true,  "Extend H/L after session",                group="New York  (9:30 AM - 5 PM ET)")
 
 // ═══════════════════════════════════════════════════════════════
-//  TIMEFRAME GATE
+//  CONSTANTS / GATE / HELPERS
 // ═══════════════════════════════════════════════════════════════
-tf_ok = not i_tf_filter or (timeframe.in_seconds() / 60) <= 15
+MAX_SESS = 4   // how many completed sessions back to track
 
-// ═══════════════════════════════════════════════════════════════
-//  BOX BORDER HELPER — same hue as fill, slightly more visible
-// ═══════════════════════════════════════════════════════════════
+tf_ok    = not i_tf_filter or (timeframe.in_seconds() / 60) <= 15
 f_border(c) => color.new(c, 85)
-
-// Small vertical gap so text sits above the line instead of on it
-LABEL_OFFSET = syminfo.mintick * 40
-
-// Helper to make a label at the current wall-clock time.
-// style_label_right  → box extends LEFT of the anchor (inside chart).
-// timenow            → always the real-time right edge, even on weekends.
-f_lbl(y, txt, col) =>
-    label.new(x=int(timenow), y=y, text=txt, xloc=xloc.bar_time,
-         color=color(na), textcolor=col, style=label.style_label_right, size=size.small)
+f_in(s)    => not na(time(timeframe.period, s, "America/New_York"))
 
 // ═══════════════════════════════════════════════════════════════
 //  PREVIOUS DAY HIGH / LOW
@@ -64,186 +47,298 @@ f_lbl(y, txt, col) =>
 pd_h = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
 pd_l = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
 
-var line  _pdh_l = na, var line  _pdl_l = na
-var label _pdh_b = na, var label _pdl_b = na
-
+var line _pdh_l = na, var line _pdl_l = na
 new_day = ta.change(time("D")) != 0
 
 if tf_ok and i_show_pd and new_day and not na(pd_h)
-    line.delete(_pdh_l),   line.delete(_pdl_l)
-    label.delete(_pdh_b),  label.delete(_pdl_b)
-
+    line.delete(_pdh_l), line.delete(_pdl_l)
     _pdh_l := line.new(bar_index, pd_h, bar_index + 1, pd_h,
          extend=extend.right, color=i_pdh_col, width=i_pd_width, style=line.style_dashed)
     _pdl_l := line.new(bar_index, pd_l, bar_index + 1, pd_l,
          extend=extend.right, color=i_pdl_col, width=i_pd_width, style=line.style_dashed)
 
-    _pdh_b := f_lbl(pd_h + LABEL_OFFSET, "PDH", i_pdh_col)
-    _pdl_b := f_lbl(pd_l + LABEL_OFFSET, "PDL", i_pdl_col)
-
 // ═══════════════════════════════════════════════════════════════
 //  MIDNIGHT OPEN
 // ═══════════════════════════════════════════════════════════════
-var line  _mid_l = na
-var label _mid_b = na
+var line  _mid_l     = na
+var float _mid_price = na
 
 is_midnight = hour(time, "America/New_York") == 0 and minute(time, "America/New_York") == 0
 
 if tf_ok and i_show_mid and is_midnight
     line.delete(_mid_l)
-    label.delete(_mid_b)
-
+    _mid_price := open
     _mid_l := line.new(bar_index, open, bar_index + 1, open,
          extend=extend.right, color=i_mid_col, width=i_mid_width, style=line.style_dotted)
-    _mid_b := f_lbl(open + LABEL_OFFSET, "Midnight Open", i_mid_col)
-
-// ═══════════════════════════════════════════════════════════════
-//  SESSION HELPER
-// ═══════════════════════════════════════════════════════════════
-f_in(s) => not na(time(timeframe.period, s, "America/New_York"))
 
 // ═══════════════════════════════════════════════════════════════
 //  ASIA SESSION  (8 PM – 11:59 PM ET)
 // ═══════════════════════════════════════════════════════════════
-ASIA_SESS = "2000-2359"
-
+ASIA_SESS  = "2000-2359"
 in_asia    = f_in(ASIA_SESS)
 asia_start = in_asia and not in_asia[1]
 asia_end   = not in_asia and in_asia[1]
 
-var float _a_hi   = na, var float _a_lo   = na
-var box   _a_box  = na
-var line  _a_hl   = na, var line  _a_ll   = na
-var label _a_hl_b = na, var label _a_ll_b = na
+// Current session build
+var float _a_hi = na, var float _a_lo = na
+var int   _a_hi_bar = na, var int _a_lo_bar = na
+var box   _a_box = na
+
+// Unswept level arrays — each completed session pushes here; swept entries removed each bar
+var float[] _a_hi_v = array.new_float()
+var float[] _a_lo_v = array.new_float()
+var int[]   _a_hi_b = array.new_int()
+var int[]   _a_lo_b = array.new_int()
+var line[]  _a_h_ln = array.new_line()
+var line[]  _a_l_ln = array.new_line()
+var label[] _a_h_lb = array.new_label()
+var label[] _a_l_lb = array.new_label()
 
 if tf_ok and i_show_asia
     if asia_start
-        _a_hi := high
-        _a_lo := low
+        _a_hi := high, _a_lo := low
+        _a_hi_bar := bar_index, _a_lo_bar := bar_index
         box.delete(_a_box)
         _a_box := box.new(bar_index, high, bar_index + 1, low,
              bgcolor=i_asia_fill, border_color=f_border(i_asia_fill), border_width=1)
 
     if in_asia and not na(_a_hi) and not na(_a_box)
-        _a_hi := math.max(_a_hi, high)
-        _a_lo := math.min(_a_lo, low)
-        box.set_top(_a_box,    _a_hi)
+        if high >= _a_hi
+            _a_hi := high, _a_hi_bar := bar_index
+        if low <= _a_lo
+            _a_lo := low, _a_lo_bar := bar_index
+        box.set_top(_a_box, _a_hi)
         box.set_bottom(_a_box, _a_lo)
-        box.set_right(_a_box,  bar_index + 1)
+        box.set_right(_a_box, bar_index + 1)
 
     if asia_end and i_asia_ext and not na(_a_hi)
-        line.delete(_a_hl),    line.delete(_a_ll)
-        label.delete(_a_hl_b), label.delete(_a_ll_b)
+        array.unshift(_a_hi_v, _a_hi),      array.unshift(_a_lo_v, _a_lo)
+        array.unshift(_a_hi_b, _a_hi_bar),  array.unshift(_a_lo_b, _a_lo_bar)
+        array.unshift(_a_h_ln, line.new(_a_hi_bar, _a_hi, _a_hi_bar+1, _a_hi, extend=extend.right, color=i_asia_line, width=1))
+        array.unshift(_a_l_ln, line.new(_a_lo_bar, _a_lo, _a_lo_bar+1, _a_lo, extend=extend.right, color=i_asia_line, width=1))
+        array.unshift(_a_h_lb, label(na)),  array.unshift(_a_l_lb, label(na))
+        if array.size(_a_hi_v) > MAX_SESS
+            line.delete(array.pop(_a_h_ln)),  line.delete(array.pop(_a_l_ln))
+            label.delete(array.pop(_a_h_lb)), label.delete(array.pop(_a_l_lb))
+            array.pop(_a_hi_v), array.pop(_a_lo_v)
+            array.pop(_a_hi_b), array.pop(_a_lo_b)
 
-        _a_hl   := line.new(bar_index, _a_hi, bar_index + 1, _a_hi,
-             extend=extend.right, color=i_asia_line, width=1)
-        _a_ll   := line.new(bar_index, _a_lo, bar_index + 1, _a_lo,
-             extend=extend.right, color=i_asia_line, width=1)
-        _a_hl_b := f_lbl(_a_hi + LABEL_OFFSET, "Asia High", i_asia_line)
-        _a_ll_b := f_lbl(_a_lo + LABEL_OFFSET, "Asia Low",  i_asia_line)
+    // Sweep check — remove any level price has traded through
+    if i_asia_ext
+        int ih = array.size(_a_hi_v) - 1
+        while ih >= 0
+            if high > array.get(_a_hi_v, ih)
+                line.delete(array.get(_a_h_ln, ih)), label.delete(array.get(_a_h_lb, ih))
+                array.remove(_a_hi_v, ih), array.remove(_a_hi_b, ih)
+                array.remove(_a_h_ln, ih), array.remove(_a_h_lb, ih)
+            ih -= 1
+        int il = array.size(_a_lo_v) - 1
+        while il >= 0
+            if low < array.get(_a_lo_v, il)
+                line.delete(array.get(_a_l_ln, il)), label.delete(array.get(_a_l_lb, il))
+                array.remove(_a_lo_v, il), array.remove(_a_lo_b, il)
+                array.remove(_a_l_ln, il), array.remove(_a_l_lb, il)
+            il -= 1
 
 // ═══════════════════════════════════════════════════════════════
 //  LONDON SESSION  (2 AM – 8 AM ET)
 // ═══════════════════════════════════════════════════════════════
-LON_SESS = "0200-0800"
-
+LON_SESS  = "0200-0800"
 in_lon    = f_in(LON_SESS)
 lon_start = in_lon and not in_lon[1]
 lon_end   = not in_lon and in_lon[1]
 
-var float _l_hi   = na, var float _l_lo   = na
-var box   _l_box  = na
-var line  _l_hl   = na, var line  _l_ll   = na
-var label _l_hl_b = na, var label _l_ll_b = na
+var float _l_hi = na, var float _l_lo = na
+var int   _l_hi_bar = na, var int _l_lo_bar = na
+var box   _l_box = na
+
+var float[] _l_hi_v = array.new_float()
+var float[] _l_lo_v = array.new_float()
+var int[]   _l_hi_b = array.new_int()
+var int[]   _l_lo_b = array.new_int()
+var line[]  _l_h_ln = array.new_line()
+var line[]  _l_l_ln = array.new_line()
+var label[] _l_h_lb = array.new_label()
+var label[] _l_l_lb = array.new_label()
 
 if tf_ok and i_show_lon
     if lon_start
-        _l_hi := high
-        _l_lo := low
+        _l_hi := high, _l_lo := low
+        _l_hi_bar := bar_index, _l_lo_bar := bar_index
         box.delete(_l_box)
         _l_box := box.new(bar_index, high, bar_index + 1, low,
              bgcolor=i_lon_fill, border_color=f_border(i_lon_fill), border_width=1)
 
     if in_lon and not na(_l_hi) and not na(_l_box)
-        _l_hi := math.max(_l_hi, high)
-        _l_lo := math.min(_l_lo, low)
-        box.set_top(_l_box,    _l_hi)
+        if high >= _l_hi
+            _l_hi := high, _l_hi_bar := bar_index
+        if low <= _l_lo
+            _l_lo := low, _l_lo_bar := bar_index
+        box.set_top(_l_box, _l_hi)
         box.set_bottom(_l_box, _l_lo)
-        box.set_right(_l_box,  bar_index + 1)
+        box.set_right(_l_box, bar_index + 1)
 
     if lon_end and i_lon_ext and not na(_l_hi)
-        line.delete(_l_hl),    line.delete(_l_ll)
-        label.delete(_l_hl_b), label.delete(_l_ll_b)
+        array.unshift(_l_hi_v, _l_hi),      array.unshift(_l_lo_v, _l_lo)
+        array.unshift(_l_hi_b, _l_hi_bar),  array.unshift(_l_lo_b, _l_lo_bar)
+        array.unshift(_l_h_ln, line.new(_l_hi_bar, _l_hi, _l_hi_bar+1, _l_hi, extend=extend.right, color=i_lon_line, width=1))
+        array.unshift(_l_l_ln, line.new(_l_lo_bar, _l_lo, _l_lo_bar+1, _l_lo, extend=extend.right, color=i_lon_line, width=1))
+        array.unshift(_l_h_lb, label(na)),  array.unshift(_l_l_lb, label(na))
+        if array.size(_l_hi_v) > MAX_SESS
+            line.delete(array.pop(_l_h_ln)),  line.delete(array.pop(_l_l_ln))
+            label.delete(array.pop(_l_h_lb)), label.delete(array.pop(_l_l_lb))
+            array.pop(_l_hi_v), array.pop(_l_lo_v)
+            array.pop(_l_hi_b), array.pop(_l_lo_b)
 
-        _l_hl   := line.new(bar_index, _l_hi, bar_index + 1, _l_hi,
-             extend=extend.right, color=i_lon_line, width=1)
-        _l_ll   := line.new(bar_index, _l_lo, bar_index + 1, _l_lo,
-             extend=extend.right, color=i_lon_line, width=1)
-        _l_hl_b := f_lbl(_l_hi + LABEL_OFFSET, "London High", i_lon_line)
-        _l_ll_b := f_lbl(_l_lo + LABEL_OFFSET, "London Low",  i_lon_line)
+    if i_lon_ext
+        int ih = array.size(_l_hi_v) - 1
+        while ih >= 0
+            if high > array.get(_l_hi_v, ih)
+                line.delete(array.get(_l_h_ln, ih)), label.delete(array.get(_l_h_lb, ih))
+                array.remove(_l_hi_v, ih), array.remove(_l_hi_b, ih)
+                array.remove(_l_h_ln, ih), array.remove(_l_h_lb, ih)
+            ih -= 1
+        int il = array.size(_l_lo_v) - 1
+        while il >= 0
+            if low < array.get(_l_lo_v, il)
+                line.delete(array.get(_l_l_ln, il)), label.delete(array.get(_l_l_lb, il))
+                array.remove(_l_lo_v, il), array.remove(_l_lo_b, il)
+                array.remove(_l_l_ln, il), array.remove(_l_l_lb, il)
+            il -= 1
 
 // ═══════════════════════════════════════════════════════════════
 //  NEW YORK SESSION  (9:30 AM – 5 PM ET)
 // ═══════════════════════════════════════════════════════════════
-NY_SESS = "0930-1700"
+NY_SESS   = "0930-1700"
+in_ny     = f_in(NY_SESS)
+ny_start  = in_ny and not in_ny[1]
+ny_end    = not in_ny and in_ny[1]
 
-in_ny    = f_in(NY_SESS)
-ny_start = in_ny and not in_ny[1]
-ny_end   = not in_ny and in_ny[1]
+var float _n_hi = na, var float _n_lo = na
+var int   _n_hi_bar = na, var int _n_lo_bar = na
+var box   _n_box = na
 
-var float _n_hi   = na, var float _n_lo   = na
-var box   _n_box  = na
-var line  _n_hl   = na, var line  _n_ll   = na
-var label _n_hl_b = na, var label _n_ll_b = na
+var float[] _n_hi_v = array.new_float()
+var float[] _n_lo_v = array.new_float()
+var int[]   _n_hi_b = array.new_int()
+var int[]   _n_lo_b = array.new_int()
+var line[]  _n_h_ln = array.new_line()
+var line[]  _n_l_ln = array.new_line()
+var label[] _n_h_lb = array.new_label()
+var label[] _n_l_lb = array.new_label()
 
 if tf_ok and i_show_ny
     if ny_start
-        _n_hi := high
-        _n_lo := low
+        _n_hi := high, _n_lo := low
+        _n_hi_bar := bar_index, _n_lo_bar := bar_index
         box.delete(_n_box)
         _n_box := box.new(bar_index, high, bar_index + 1, low,
              bgcolor=i_ny_fill, border_color=f_border(i_ny_fill), border_width=1)
 
     if in_ny and not na(_n_hi) and not na(_n_box)
-        _n_hi := math.max(_n_hi, high)
-        _n_lo := math.min(_n_lo, low)
-        box.set_top(_n_box,    _n_hi)
+        if high >= _n_hi
+            _n_hi := high, _n_hi_bar := bar_index
+        if low <= _n_lo
+            _n_lo := low, _n_lo_bar := bar_index
+        box.set_top(_n_box, _n_hi)
         box.set_bottom(_n_box, _n_lo)
-        box.set_right(_n_box,  bar_index + 1)
+        box.set_right(_n_box, bar_index + 1)
 
     if ny_end and i_ny_ext and not na(_n_hi)
-        line.delete(_n_hl),    line.delete(_n_ll)
-        label.delete(_n_hl_b), label.delete(_n_ll_b)
+        array.unshift(_n_hi_v, _n_hi),      array.unshift(_n_lo_v, _n_lo)
+        array.unshift(_n_hi_b, _n_hi_bar),  array.unshift(_n_lo_b, _n_lo_bar)
+        array.unshift(_n_h_ln, line.new(_n_hi_bar, _n_hi, _n_hi_bar+1, _n_hi, extend=extend.right, color=i_ny_line, width=1))
+        array.unshift(_n_l_ln, line.new(_n_lo_bar, _n_lo, _n_lo_bar+1, _n_lo, extend=extend.right, color=i_ny_line, width=1))
+        array.unshift(_n_h_lb, label(na)),  array.unshift(_n_l_lb, label(na))
+        if array.size(_n_hi_v) > MAX_SESS
+            line.delete(array.pop(_n_h_ln)),  line.delete(array.pop(_n_l_ln))
+            label.delete(array.pop(_n_h_lb)), label.delete(array.pop(_n_l_lb))
+            array.pop(_n_hi_v), array.pop(_n_lo_v)
+            array.pop(_n_hi_b), array.pop(_n_lo_b)
 
-        _n_hl   := line.new(bar_index, _n_hi, bar_index + 1, _n_hi,
-             extend=extend.right, color=i_ny_line, width=1)
-        _n_ll   := line.new(bar_index, _n_lo, bar_index + 1, _n_lo,
-             extend=extend.right, color=i_ny_line, width=1)
-        _n_hl_b := f_lbl(_n_hi + LABEL_OFFSET, "Prev NY High", i_ny_line)
-        _n_ll_b := f_lbl(_n_lo + LABEL_OFFSET, "Prev NY Low",  i_ny_line)
+    if i_ny_ext
+        int ih = array.size(_n_hi_v) - 1
+        while ih >= 0
+            if high > array.get(_n_hi_v, ih)
+                line.delete(array.get(_n_h_ln, ih)), label.delete(array.get(_n_h_lb, ih))
+                array.remove(_n_hi_v, ih), array.remove(_n_hi_b, ih)
+                array.remove(_n_h_ln, ih), array.remove(_n_h_lb, ih)
+            ih -= 1
+        int il = array.size(_n_lo_v) - 1
+        while il >= 0
+            if low < array.get(_n_lo_v, il)
+                line.delete(array.get(_n_l_ln, il)), label.delete(array.get(_n_l_lb, il))
+                array.remove(_n_lo_v, il), array.remove(_n_lo_b, il)
+                array.remove(_n_l_ln, il), array.remove(_n_l_lb, il)
+            il -= 1
 
 // ═══════════════════════════════════════════════════════════════
-//  KEEP LABELS AT THE REAL-TIME RIGHT EDGE
-//  Runs only on the last bar. Uses timenow (wall-clock) so labels
-//  stay at the right edge even during weekends / market closures.
+//  RIGHT-EDGE LABELS  (recreated on every bar at timenow)
 // ═══════════════════════════════════════════════════════════════
+var label _lb_pdh = na, var label _lb_pdl = na
+var label _lb_mid = na
+
+// Push label anchor 20 bars into the future — sits in empty space, never on candles
+_lbl_x   = int(timenow) + timeframe.in_seconds() * 1000 * 20
+// Nudge text upward so it rests just above the line rather than through it
+_lbl_off = syminfo.mintick * 23
+
+f_lbl(lbl, y, txt, col) =>
+    label.delete(lbl)
+    label.new(_lbl_x, y + _lbl_off, txt,
+         xloc=xloc.bar_time, style=label.style_label_right,
+         color=color(na), textcolor=col, size=size.small)
+
+f_arr_lbl(arr, y, txt, col) =>
+    label.new(_lbl_x, y + _lbl_off, txt,
+         xloc=xloc.bar_time, style=label.style_label_right,
+         color=color(na), textcolor=col, size=size.small)
+
 if barstate.islast and tf_ok
-    tnow = int(timenow)
-    if not na(_pdh_b)
-        label.set_x(_pdh_b, tnow)
-    if not na(_pdl_b)
-        label.set_x(_pdl_b, tnow)
-    if not na(_mid_b)
-        label.set_x(_mid_b, tnow)
-    if not na(_a_hl_b)
-        label.set_x(_a_hl_b, tnow)
-    if not na(_a_ll_b)
-        label.set_x(_a_ll_b, tnow)
-    if not na(_l_hl_b)
-        label.set_x(_l_hl_b, tnow)
-    if not na(_l_ll_b)
-        label.set_x(_l_ll_b, tnow)
-    if not na(_n_hl_b)
-        label.set_x(_n_hl_b, tnow)
-    if not na(_n_ll_b)
-        label.set_x(_n_ll_b, tnow)
+    // PDH / PDL
+    if i_show_pd
+        _lb_pdh := f_lbl(_lb_pdh, pd_h, "PDH.", i_pdh_col)
+        _lb_pdl := f_lbl(_lb_pdl, pd_l, "PDL.", i_pdl_col)
+
+    // Midnight Open
+    if i_show_mid and not na(_mid_price)
+        _lb_mid := f_lbl(_lb_mid, _mid_price, "12AM.", i_mid_col)
+
+    // Asia — one label per unswept level in the array
+    if i_show_asia and i_asia_ext
+        int n = array.size(_a_hi_v)
+        if n > 0
+            for i = 0 to n - 1
+                label.delete(array.get(_a_h_lb, i))
+                array.set(_a_h_lb, i, f_arr_lbl(_a_h_lb, array.get(_a_hi_v, i), "Asia. H", i_asia_line))
+        n := array.size(_a_lo_v)
+        if n > 0
+            for i = 0 to n - 1
+                label.delete(array.get(_a_l_lb, i))
+                array.set(_a_l_lb, i, f_arr_lbl(_a_l_lb, array.get(_a_lo_v, i), "Asia. L", i_asia_line))
+
+    // London
+    if i_show_lon and i_lon_ext
+        int n = array.size(_l_hi_v)
+        if n > 0
+            for i = 0 to n - 1
+                label.delete(array.get(_l_h_lb, i))
+                array.set(_l_h_lb, i, f_arr_lbl(_l_h_lb, array.get(_l_hi_v, i), "Lon. H", i_lon_line))
+        n := array.size(_l_lo_v)
+        if n > 0
+            for i = 0 to n - 1
+                label.delete(array.get(_l_l_lb, i))
+                array.set(_l_l_lb, i, f_arr_lbl(_l_l_lb, array.get(_l_lo_v, i), "Lon. L", i_lon_line))
+
+    // New York
+    if i_show_ny and i_ny_ext
+        int n = array.size(_n_hi_v)
+        if n > 0
+            for i = 0 to n - 1
+                label.delete(array.get(_n_h_lb, i))
+                array.set(_n_h_lb, i, f_arr_lbl(_n_h_lb, array.get(_n_hi_v, i), "NY. H", i_ny_line))
+        n := array.size(_n_lo_v)
+        if n > 0
+            for i = 0 to n - 1
+                label.delete(array.get(_n_l_lb, i))
+                array.set(_n_l_lb, i, f_arr_lbl(_n_l_lb, array.get(_n_lo_v, i), "NY. L", i_ny_line))
